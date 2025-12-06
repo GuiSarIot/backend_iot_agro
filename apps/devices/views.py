@@ -205,3 +205,53 @@ class DispositivoViewSet(viewsets.ModelViewSet):
         dispositivos = self.get_queryset().filter(mqtt_enabled=True)
         serializer = self.get_serializer(dispositivos, many=True)
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['get'])
+    def mqtt_credentials(self, request, pk=None):
+        """
+        Obtener credenciales EMQX/MQTT del dispositivo
+        GET /api/devices/{id}/mqtt-credentials/
+        
+        Solo superusuarios pueden ver las credenciales completas
+        """
+        dispositivo = self.get_object()
+        
+        # Verificar si tiene usuario EMQX
+        try:
+            from apps.mqtt.models import EMQXUser
+            emqx_user = EMQXUser.objects.get(dispositivo=dispositivo)
+            
+            response_data = {
+                'has_mqtt_user': True,
+                'mqtt_username': emqx_user.username,
+                'is_superuser': emqx_user.is_superuser,
+                'created': emqx_user.created,
+                'acl_rules_count': emqx_user.acl_rules.count()
+            }
+            
+            # Solo superusuarios ven credenciales completas
+            if request.user.is_superuser:
+                response_data.update({
+                    'password_hash': emqx_user.password_hash,
+                    'salt': emqx_user.salt,
+                    'acl_rules': [
+                        {
+                            'permission': rule.permission,
+                            'action': rule.action,
+                            'topic': rule.topic,
+                            'qos': rule.qos,
+                            'retain': rule.retain
+                        }
+                        for rule in emqx_user.acl_rules.all()
+                    ]
+                })
+            else:
+                response_data['message'] = 'Solo superusuarios pueden ver credenciales completas'
+            
+            return Response(response_data)
+            
+        except EMQXUser.DoesNotExist:
+            return Response({
+                'has_mqtt_user': False,
+                'message': 'Este dispositivo no tiene usuario MQTT configurado'
+            }, status=status.HTTP_404_NOT_FOUND)

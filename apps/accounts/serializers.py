@@ -133,6 +133,10 @@ class CustomUserSerializer(serializers.ModelSerializer):
         read_only=True
     )
     full_name = serializers.SerializerMethodField()
+    can_receive_telegram = serializers.BooleanField(
+        source='can_receive_telegram_notifications',
+        read_only=True
+    )
     
     class Meta:
         model = CustomUser
@@ -140,11 +144,18 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'first_name', 'last_name',
             'full_name', 'tipo_usuario', 'tipo_usuario_display',
             'is_active', 'is_staff', 'is_superuser', 'rol',
-            'rol_detail', 'created_at', 'updated_at', 'last_login'
+            'rol_detail', 'created_at', 'updated_at', 'last_login',
+            # Telegram fields
+            'telegram_chat_id', 'telegram_username', 'telegram_notifications_enabled',
+            'telegram_verified', 'can_receive_telegram'
         ]
-        read_only_fields = ['created_at', 'updated_at', 'last_login']
+        read_only_fields = [
+            'created_at', 'updated_at', 'last_login', 
+            'telegram_verified', 'can_receive_telegram'
+        ]
         extra_kwargs = {
-            'password': {'write_only': True}
+            'password': {'write_only': True},
+            'telegram_chat_id': {'read_only': True}  # Solo el bot puede establecerlo
         }
     
     def get_full_name(self, obj):
@@ -161,7 +172,8 @@ class CustomUserCreateUpdateSerializer(serializers.ModelSerializer):
         model = CustomUser
         fields = [
             'id', 'username', 'email', 'password', 'first_name',
-            'last_name', 'tipo_usuario', 'is_active', 'rol'
+            'last_name', 'tipo_usuario', 'is_active', 'rol',
+            'telegram_username', 'telegram_notifications_enabled'
         ]
     
     def create(self, validated_data):
@@ -182,3 +194,202 @@ class CustomUserCreateUpdateSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+
+
+# ============ Serializers de Auditoría ============
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    """
+    Serializer para registros de auditoría (solo lectura)
+    """
+    user_display = serializers.CharField(source='username', read_only=True)
+    action_display = serializers.CharField(source='get_action_display', read_only=True)
+    
+    class Meta:
+        model = 'accounts.AuditLog'
+        fields = [
+            'id', 'user', 'user_display', 'username', 'model_name',
+            'object_id', 'object_repr', 'action', 'action_display',
+            'changes', 'ip_address', 'user_agent', 'timestamp'
+        ]
+        read_only_fields = fields
+    
+    def to_representation(self, instance):
+        from .models import AuditLog
+        if not isinstance(instance, AuditLog):
+            instance = AuditLog.objects.get(pk=instance.pk)
+        return super().to_representation(instance)
+
+
+class AccessLogSerializer(serializers.ModelSerializer):
+    """
+    Serializer para registros de acceso a módulos
+    """
+    user_display = serializers.CharField(source='username', read_only=True)
+    module_display = serializers.CharField(source='get_module_display', read_only=True)
+    is_error = serializers.BooleanField(read_only=True)
+    is_slow = serializers.BooleanField(read_only=True)
+    
+    class Meta:
+        model = 'accounts.AccessLog'
+        fields = [
+            'id', 'user', 'user_display', 'username', 'module',
+            'module_display', 'endpoint', 'method', 'status_code',
+            'ip_address', 'user_agent', 'response_time_ms',
+            'query_params', 'metadata', 'timestamp', 'is_error', 'is_slow'
+        ]
+        read_only_fields = fields
+    
+    def to_representation(self, instance):
+        from .models import AccessLog
+        if not isinstance(instance, AccessLog):
+            instance = AccessLog.objects.get(pk=instance.pk)
+        return super().to_representation(instance)
+
+
+class CreateAccessLogSerializer(serializers.ModelSerializer):
+    """
+    Serializer para crear registros de acceso (write-only)
+    """
+    class Meta:
+        model = 'accounts.AccessLog'
+        fields = [
+            'module', 'endpoint', 'method', 'status_code',
+            'ip_address', 'user_agent', 'response_time_ms',
+            'query_params', 'metadata'
+        ]
+    
+    def create(self, validated_data):
+        from .models import AccessLog
+        # Agregar usuario del contexto
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            user = request.user
+            validated_data['user'] = user if user.is_authenticated else None
+            validated_data['username'] = user.username if user.is_authenticated else 'anonymous'
+        else:
+            validated_data['username'] = 'system'
+        
+        return AccessLog.objects.create(**validated_data)
+
+
+# ============ Serializers de Telegram ============
+
+class TelegramVerificationSerializer(serializers.Serializer):
+    """
+    Serializer para generar código de verificación de Telegram
+    """
+    pass
+
+
+class TelegramVerifyCodeSerializer(serializers.Serializer):
+    """
+    Serializer para verificar código de Telegram
+    """
+    code = serializers.CharField(
+        max_length=10,
+        required=True,
+        help_text='Código de verificación recibido'
+    )
+
+
+class TelegramLinkSerializer(serializers.Serializer):
+    """
+    Serializer para vincular cuenta de Telegram (usado por el bot)
+    """
+    user_id = serializers.IntegerField(required=True)
+    chat_id = serializers.CharField(max_length=50, required=True)
+    username = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    verification_code = serializers.CharField(max_length=10, required=True)
+
+
+class TelegramNotificationSerializer(serializers.Serializer):
+    """
+    Serializer para enviar notificación via Telegram
+    """
+    user_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        help_text='IDs de usuarios específicos (opcional)'
+    )
+    message = serializers.CharField(
+        required=True,
+        help_text='Mensaje a enviar'
+    )
+    notification_type = serializers.ChoiceField(
+        choices=[
+            ('info', 'Información'),
+            ('warning', 'Advertencia'),
+            ('error', 'Error'),
+            ('success', 'Éxito'),
+        ],
+        default='info',
+        required=False
+    )
+    send_to_all_verified = serializers.BooleanField(
+        default=False,
+        help_text='Enviar a todos los usuarios verificados'
+    )
+
+
+# ============ Serializers de Email ============
+
+class EmailVerificationSerializer(serializers.Serializer):
+    """
+    Serializer para enviar email de verificación
+    """
+    pass
+
+
+class EmailVerifyTokenSerializer(serializers.Serializer):
+    """
+    Serializer para verificar token de email
+    """
+    token = serializers.CharField(
+        max_length=100,
+        required=True,
+        help_text='Token de verificación recibido por email'
+    )
+
+
+class EmailNotificationSerializer(serializers.Serializer):
+    """
+    Serializer para enviar notificación via Email
+    """
+    user_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        help_text='IDs de usuarios específicos (opcional)'
+    )
+    message = serializers.CharField(
+        required=True,
+        help_text='Mensaje a enviar'
+    )
+    subject = serializers.CharField(
+        required=False,
+        help_text='Asunto del email (opcional, se genera automáticamente)'
+    )
+    notification_type = serializers.ChoiceField(
+        choices=[
+            ('info', 'Información'),
+            ('warning', 'Advertencia'),
+            ('error', 'Error'),
+            ('success', 'Éxito'),
+        ],
+        default='info',
+        required=False
+    )
+    send_to_all_verified = serializers.BooleanField(
+        default=False,
+        help_text='Enviar a todos los usuarios con email verificado'
+    )
+
+
+class EmailPreferencesSerializer(serializers.Serializer):
+    """
+    Serializer para actualizar preferencias de notificaciones por email
+    """
+    email_notifications_enabled = serializers.BooleanField(
+        required=False,
+        help_text='Habilitar/deshabilitar notificaciones por email'
+    )

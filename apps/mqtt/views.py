@@ -8,11 +8,12 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 import logging
 
-from .models import BrokerConfig, MQTTCredential, MQTTTopic, DeviceMQTTConfig
+from .models import BrokerConfig, MQTTCredential, MQTTTopic, DeviceMQTTConfig, EMQXUser, EMQXACL
 from .serializers import (
     BrokerConfigSerializer, MQTTCredentialSerializer, MQTTCredentialDetailSerializer,
     MQTTTopicSerializer, DeviceMQTTConfigSerializer, DeviceMQTTConfigDetailSerializer,
-    TestMQTTConnectionSerializer
+    TestMQTTConnectionSerializer, EMQXUserSerializer, EMQXUserDetailSerializer,
+    EMQXACLSerializer, CreateEMQXUserWithACLSerializer
 )
 from apps.accounts.permissions import CanManageMQTT, CanViewMQTTCredentials
 from apps.devices.models import Dispositivo
@@ -348,3 +349,192 @@ def device_mqtt_status(request):
         'error': error,
         'percentage_online': round((online / total * 100) if total > 0 else 0, 2)
     })
+
+
+class EMQXUserViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar usuarios EMQX (autenticación MQTT)
+    """
+    queryset = EMQXUser.objects.select_related('dispositivo').prefetch_related('acl_rules').all()
+    permission_classes = [IsAuthenticated, CanManageMQTT]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['username', 'dispositivo__nombre']
+    ordering_fields = ['username', 'created']
+    ordering = ['-created']
+    
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return EMQXUserDetailSerializer
+        elif self.action == 'create_with_acl':
+            return CreateEMQXUserWithACLSerializer
+        return EMQXUserSerializer
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Filtrar por superusuario
+        is_superuser = self.request.query_params.get('is_superuser', None)
+        if is_superuser is not None:
+            queryset = queryset.filter(is_superuser=is_superuser.lower() == 'true')
+        
+        # Filtrar por dispositivo
+        dispositivo_id = self.request.query_params.get('dispositivo', None)
+        if dispositivo_id:
+            queryset = queryset.filter(dispositivo_id=dispositivo_id)
+        
+        return queryset
+    
+    def perform_create(self, serializer):
+        logger.info(f"Creando usuario EMQX: {serializer.validated_data.get('username')}")
+        serializer.save()
+    
+    @action(detail=True, methods=['get'])
+    def credentials(self, request, pk=None):
+        """
+        Obtener credenciales de usuario EMQX (solo superusuarios)
+        GET /api/mqtt/emqx-users/{id}/credentials/
+        """
+        if not request.user.is_superuser:
+            return Response({
+                'error': 'Solo superusuarios pueden ver credenciales completas'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        user = self.get_object()
+        return Response({
+            'username': user.username,
+            'password_hash': user.password_hash,
+            'salt': user.salt,
+            'is_superuser': user.is_superuser,
+            'dispositivo': user.dispositivo.nombre if user.dispositivo else None,
+            'created': user.created
+        })
+    
+    @action(detail=True, methods=['post'])
+    def change_password(self, request, pk=None):
+        """
+        Cambiar contraseña de usuario EMQX
+        POST /api/mqtt/emqx-users/{id}/change_password/
+        Body: {"password": "nueva_password"}
+        """
+        user = self.get_object()
+        new_password = request.data.get('password')
+        
+        if not new_password:
+            return Response({
+                'error': 'Se requiere el campo "password"'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        if len(new_password) < 8:
+            return Response({
+                'error': 'La contraseña debe tener al menos 8 caracteres'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        user.set_password(new_password)
+        user.save()
+        
+        logger.info(f"Contraseña actualizada para usuario EMQX: {user.username}")
+        
+        return Response({
+            'message': f'Contraseña actualizada exitosamente para {user.username}'
+        })
+    
+    @action(detail=False, methods=['post'])
+    def create_with_acl(self, request):
+        """
+        Crear usuario EMQX con reglas ACL en una sola operación
+        POST /api/mqtt/emqx-users/create_with_acl/
+        """
+        serializer = self.get_serializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            logger.info(
+                f"Usuario EMQX creado con reglas ACL: {user.username} "
+                f"({user.acl_rules.count()} reglas)"
+            )
+            return Response(
+                EMQXUserDetailSerializer(user).data,
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class EMQXACLViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet para gestionar reglas ACL de EMQX (autorización MQTT)
+    """
+    queryset = EMQXACL.objects.select_related('emqx_user').all()
+    serializer_class = EMQXACLSerializer
+    permission_classes = [IsAuthenticated, CanManageMQTT]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['username', 'topic']
+    ordering_fields = ['username', 'topic', 'created_at']
+    ordering = ['username', 'topic']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Filtrar por username
+        username = self.request.query_params.get('username', None)
+        if username:
+            queryset = queryset.filter(username=username)
+        
+        # Filtrar por acción
+        action = self.request.query_params.get('action', None)
+        if action:
+            queryset = queryset.filter(action=action)
+        
+        # Filtrar por permiso
+        permission = self.request.query_params.get('permission', None)
+        if permission:
+            queryset = queryset.filter(permission=permission)
+        
+        # Filtrar por usuario EMQX
+        emqx_user_id = self.request.query_params.get('emqx_user', None)
+        if emqx_user_id:
+            queryset = queryset.filter(emqx_user_id=emqx_user_id)
+        
+        return queryset
+    
+    def perform_create(self, serializer):
+        logger.info(
+            f"Creando regla ACL: {serializer.validated_data.get('username')} - "
+            f"{serializer.validated_data.get('action')} on {serializer.validated_data.get('topic')}"
+        )
+        serializer.save()
+    
+    @action(detail=False, methods=['get'])
+    def by_device(self, request):
+        """
+        Obtener reglas ACL por dispositivo
+        GET /api/mqtt/emqx-acl/by_device/?dispositivo_id=1
+        """
+        dispositivo_id = request.query_params.get('dispositivo_id')
+        
+        if not dispositivo_id:
+            return Response({
+                'error': 'Se requiere el parámetro dispositivo_id'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            dispositivo = Dispositivo.objects.get(id=dispositivo_id)
+        except Dispositivo.DoesNotExist:
+            return Response({
+                'error': 'Dispositivo no encontrado'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Buscar usuario EMQX del dispositivo
+        try:
+            emqx_user = EMQXUser.objects.get(dispositivo=dispositivo)
+            acl_rules = EMQXACL.objects.filter(emqx_user=emqx_user)
+            serializer = self.get_serializer(acl_rules, many=True)
+            
+            return Response({
+                'dispositivo': dispositivo.nombre,
+                'emqx_username': emqx_user.username,
+                'acl_rules_count': acl_rules.count(),
+                'acl_rules': serializer.data
+            })
+        except EMQXUser.DoesNotExist:
+            return Response({
+                'error': 'El dispositivo no tiene usuario EMQX asociado'
+            }, status=status.HTTP_404_NOT_FOUND)

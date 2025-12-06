@@ -3,7 +3,7 @@ Configuracion del Django Admin para la app MQTT
 """
 
 from django.contrib import admin
-from .models import BrokerConfig, MQTTCredential, MQTTTopic, DeviceMQTTConfig
+from .models import BrokerConfig, MQTTCredential, MQTTTopic, DeviceMQTTConfig, EMQXUser, EMQXACL
 
 
 @admin.register(BrokerConfig)
@@ -120,3 +120,90 @@ class DeviceMQTTConfigAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+class EMQXACLInline(admin.TabularInline):
+    """
+    Inline para mostrar reglas ACL dentro del admin de EMQXUser
+    """
+    model = EMQXACL
+    extra = 1
+    fields = ['permission', 'action', 'topic', 'qos', 'retain']
+
+
+@admin.register(EMQXUser)
+class EMQXUserAdmin(admin.ModelAdmin):
+    """
+    Admin para el modelo EMQXUser (Autenticación EMQX)
+    """
+    list_display = ['username', 'is_superuser', 'dispositivo', 'created']
+    list_filter = ['is_superuser', 'created']
+    search_fields = ['username', 'dispositivo__nombre']
+    ordering = ['-created']
+    readonly_fields = ['created', 'password_hash', 'salt']
+    inlines = [EMQXACLInline]
+    
+    fieldsets = (
+        ('Usuario MQTT', {
+            'fields': ('username', 'is_superuser', 'dispositivo')
+        }),
+        ('Seguridad (Solo Lectura)', {
+            'fields': ('password_hash', 'salt'),
+            'classes': ('collapse',),
+            'description': 'Los hashes se generan automáticamente. Use la API o métodos del modelo para cambiar contraseñas.'
+        }),
+        ('Metadata', {
+            'fields': ('created',),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_readonly_fields(self, request, obj=None):
+        """
+        Hacer password_hash y salt siempre readonly
+        """
+        if obj:  # Editing
+            return self.readonly_fields + ('username',)
+        return self.readonly_fields
+
+
+@admin.register(EMQXACL)
+class EMQXACLAdmin(admin.ModelAdmin):
+    """
+    Admin para el modelo EMQXACL (Autorización EMQX)
+    """
+    list_display = ['username', 'permission', 'action', 'topic', 'qos', 'retain', 'created_at']
+    list_filter = ['permission', 'action', 'qos', 'retain', 'created_at']
+    search_fields = ['username', 'topic']
+    ordering = ['username', 'topic']
+    readonly_fields = ['created_at']
+    autocomplete_fields = ['emqx_user']
+    
+    fieldsets = (
+        ('Regla ACL', {
+            'fields': ('username', 'emqx_user')
+        }),
+        ('Permisos', {
+            'fields': ('permission', 'action', 'topic')
+        }),
+        ('Opciones MQTT', {
+            'fields': ('qos', 'retain'),
+            'classes': ('collapse',)
+        }),
+        ('Metadata', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def get_form(self, request, obj=None, **kwargs):
+        """
+        Personalizar el formulario para ayudar con la selección de username
+        """
+        form = super().get_form(request, obj, **kwargs)
+        if not obj:  # Nuevo objeto
+            form.base_fields['username'].help_text = (
+                'Debe coincidir con un usuario EMQX existente. '
+                'Seleccione el usuario EMQX abajo para autocompletar.'
+            )
+        return form
