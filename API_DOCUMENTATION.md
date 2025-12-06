@@ -7,9 +7,12 @@
 4. [Sensores](#sensores)
 5. [Dispositivos](#dispositivos)
 6. [Lecturas](#lecturas)
-7. [Dashboard](#dashboard)
-8. [Códigos de Estado HTTP](#códigos-de-estado-http)
-9. [Filtros y Búsqueda](#filtros-y-búsqueda)
+7. [Auditoría y Logs](#auditoría-y-logs)
+8. [Notificaciones - Telegram](#notificaciones---telegram)
+9. [Notificaciones - Email](#notificaciones---email)
+10. [Dashboard](#dashboard)
+11. [Códigos de Estado HTTP](#códigos-de-estado-http)
+12. [Filtros y Búsqueda](#filtros-y-búsqueda)
 
 ---
 
@@ -777,6 +780,386 @@
   "promedio": 24.8,
   "maximo": 32.5,
   "minimo": 18.2
+}
+```
+
+---
+
+## Auditoría y Logs
+
+### 1. Listar Logs de Auditoría
+**Endpoint**: `GET /api/audit-logs/`  
+**Permisos**: Superusuario  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Filtros**:
+- `action`: `CREATE`, `UPDATE`, `DELETE`
+- `model_name`: Nombre del modelo
+- `username`: Usuario que realizó la acción
+
+**Response** (200 OK):
+```json
+{
+  "count": 150,
+  "next": "http://localhost:8000/api/audit-logs/?page=2",
+  "previous": null,
+  "results": [
+    {
+      "id": 1,
+      "timestamp": "2025-12-05T19:30:00Z",
+      "user": 1,
+      "username": "admin",
+      "model_name": "Dispositivo",
+      "object_id": "5",
+      "object_repr": "Raspberry Pi 4 - Sensor Hub",
+      "action": "UPDATE",
+      "changes": {
+        "estado": {"old": "offline", "new": "online"}
+      },
+      "ip_address": "192.168.1.100",
+      "user_agent": "Mozilla/5.0..."
+    }
+  ]
+}
+```
+
+---
+
+### 2. Estadísticas de Auditoría
+**Endpoint**: `GET /api/audit-logs/stats/`  
+**Permisos**: Superusuario  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Response** (200 OK):
+```json
+{
+  "total_logs": 150,
+  "by_action": {
+    "CREATE": 50,
+    "UPDATE": 80,
+    "DELETE": 20
+  },
+  "by_model": {
+    "Dispositivo": 45,
+    "Sensor": 38,
+    "Lectura": 67
+  },
+  "recent_logs": [...]
+}
+```
+
+---
+
+### 3. Listar Logs de Acceso
+**Endpoint**: `GET /api/access-logs/`  
+**Permisos**: Autenticado (usuarios ven sus propios logs, superusuarios ven todos)  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Filtros**:
+- `method`: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`
+- `status_code`: Código HTTP
+- `module`: Módulo de la app
+
+**Response** (200 OK):
+```json
+{
+  "count": 500,
+  "results": [
+    {
+      "id": 1,
+      "timestamp": "2025-12-05T19:35:00Z",
+      "user": 1,
+      "username": "admin",
+      "module": "devices",
+      "endpoint": "/api/devices/",
+      "method": "GET",
+      "status_code": 200,
+      "response_time_ms": 45.2,
+      "ip_address": "192.168.1.100",
+      "user_agent": "PostmanRuntime/7.32.0"
+    }
+  ]
+}
+```
+
+---
+
+### 4. Estadísticas de Acceso
+**Endpoint**: `GET /api/access-logs/stats/`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Response** (200 OK):
+```json
+{
+  "total_requests": 500,
+  "by_method": {
+    "GET": 350,
+    "POST": 100,
+    "PUT": 30,
+    "DELETE": 20
+  },
+  "by_status": {
+    "200": 450,
+    "201": 50,
+    "400": 5,
+    "404": 3
+  },
+  "avg_response_time_ms": 52.4
+}
+```
+
+---
+
+### 5. Crear Log de Acceso Manual
+**Endpoint**: `POST /api/access-logs/create-log/`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Request Body**:
+```json
+{
+  "module": "custom",
+  "endpoint": "/api/custom/action/",
+  "method": "POST",
+  "status_code": 200,
+  "response_time_ms": 120.5
+}
+```
+
+---
+
+## Notificaciones - Telegram
+
+### 1. Generar Código de Verificación
+**Endpoint**: `POST /api/telegram/generate-verification/`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "verification_code": "A3F9B2C1",
+  "expires_in_minutes": 15,
+  "message": "Envía este código a @iot_sensor_platform_bot en Telegram"
+}
+```
+
+---
+
+### 2. Verificar Código (desde web)
+**Endpoint**: `POST /api/telegram/verify-code/`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Request Body**:
+```json
+{
+  "code": "A3F9B2C1"
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "message": "Código verificado. Envíalo al bot de Telegram."
+}
+```
+
+---
+
+### 3. Vincular Cuenta (llamado por el bot)
+**Endpoint**: `POST /api/telegram/link-account/`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Request Body**:
+```json
+{
+  "user_id": 1,
+  "chat_id": "1393684739",
+  "username": "usuario_telegram",
+  "verification_code": "A3F9B2C1"
+}
+```
+
+---
+
+### 4. Desvincular Cuenta
+**Endpoint**: `POST /api/telegram/unlink-account/`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "message": "Cuenta de Telegram desvinculada"
+}
+```
+
+---
+
+### 5. Enviar Notificación (Superusuarios)
+**Endpoint**: `POST /api/telegram/send-notification/`  
+**Permisos**: Superusuario  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Request Body**:
+```json
+{
+  "user_ids": [1, 2, 3],
+  "message": "Mantenimiento programado para mañana",
+  "notification_type": "warning",
+  "send_to_all_verified": false
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "message": "Notificación enviada a 3 usuario(s)",
+  "sent_to": [
+    {"user_id": 1, "username": "admin", "chat_id": "123456789"}
+  ]
+}
+```
+
+---
+
+### 6. Estado de Telegram
+**Endpoint**: `GET /api/telegram/status/`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Response** (200 OK):
+```json
+{
+  "is_linked": true,
+  "is_verified": true,
+  "notifications_enabled": true,
+  "can_receive_notifications": true,
+  "telegram_username": "@usuario_telegram",
+  "has_pending_verification": false
+}
+```
+
+---
+
+## Notificaciones - Email
+
+### 1. Enviar Email de Verificación
+**Endpoint**: `POST /api/email/send-verification/`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "message": "Email de verificación enviado a usuario@example.com",
+  "email": "usuario@example.com"
+}
+```
+
+---
+
+### 2. Verificar Token de Email
+**Endpoint**: `GET /api/email/verify/?token=xyz123...`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**También acepta POST**:
+```json
+{
+  "token": "xyz123..."
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "message": "Email verificado exitosamente",
+  "email_verified": true
+}
+```
+
+---
+
+### 3. Actualizar Preferencias de Email
+**Endpoint**: `POST /api/email/preferences/`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Request Body**:
+```json
+{
+  "email_notifications_enabled": true
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "message": "Preferencias actualizadas",
+  "email_notifications_enabled": true,
+  "can_receive_email_notifications": true
+}
+```
+
+---
+
+### 4. Enviar Notificación por Email (Superusuarios)
+**Endpoint**: `POST /api/email/send-notification/`  
+**Permisos**: Superusuario  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Request Body**:
+```json
+{
+  "user_ids": [1, 2, 3],
+  "message": "<h3>Mantenimiento</h3><p>El sistema estará en mantenimiento mañana</p>",
+  "subject": "Mantenimiento del Sistema",
+  "notification_type": "warning",
+  "send_to_all_verified": false
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "success": true,
+  "message": "Notificaciones enviadas: 3 exitosos, 0 fallidos",
+  "results": {
+    "sent": 3,
+    "failed": 0,
+    "errors": []
+  }
+}
+```
+
+---
+
+### 5. Estado de Email
+**Endpoint**: `GET /api/email/status/`  
+**Permisos**: Autenticado  
+**Headers**: `Authorization: Bearer {access_token}`
+
+**Response** (200 OK):
+```json
+{
+  "has_email": true,
+  "email": "usuario@example.com",
+  "is_verified": true,
+  "notifications_enabled": true,
+  "can_receive_notifications": true,
+  "verification_sent_at": "2025-12-05T19:30:00Z",
+  "has_pending_verification": false
 }
 ```
 
