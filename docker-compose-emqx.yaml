@@ -1,0 +1,83 @@
+version: '3.8'
+
+volumes:
+  vol-emqx-data:
+    name: foo-emqx-data
+  vol-emqx-etc:
+    name: foo-emqx-etc
+  vol-emqx-log:
+    name: foo-emqx-log
+
+networks:
+  iotcorpsas_net:
+    driver: bridge
+
+services:
+  emqx:
+    image: emqx/emqx:5.8.3
+    pull_policy: never
+    container_name: emqx
+    platform: linux/arm64
+    restart: always
+    ports:
+      - "18083:18083"   # Dashboard
+      - "1883:1883"     # MQTT
+      - "8883:8883"     # MQTT SSL
+      - "8083:8083"     # WebSocket
+      - "8084:8084"     # WSS
+      - "8081:8081"     # Management API
+    volumes:
+      - vol-emqx-data:/opt/emqx/data
+      - vol-emqx-etc:/opt/emqx/etc
+      - vol-emqx-log:/opt/emqx/log
+    environment:
+      # ─────────────────────────────────────────────────────────
+      # Identidad
+      # ─────────────────────────────────────────────────────────
+      EMQX_NAME: iotcorpsas_org
+      EMQX_NODE__COOKIE: "mycookiefileemqxyhp"
+
+      # ─────────────────────────────────────────────────────────
+      # Dashboard
+      # ─────────────────────────────────────────────────────────
+      EMQX_DASHBOARD__DEFAULT_USERNAME: "admin"
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: "emqxpass"
+
+      # ─────────────────────────────────────────────────────────
+      # Seguridad
+      # ─────────────────────────────────────────────────────────
+      EMQX_ALLOW_ANONYMOUS: "false"
+
+      # ─────────────────────────────────────────────────────────
+      # Autenticación PostgreSQL (sintaxis EMQX 5.x)
+      # ─────────────────────────────────────────────────────────
+      EMQX_AUTH__POSTGRES__SERVER: "${POSTGRES_HOST}:${POSTGRES_PORT}"
+      EMQX_AUTH__POSTGRES__DATABASE: "${POSTGRES_DB}"
+      EMQX_AUTH__POSTGRES__USERNAME: "${POSTGRES_USER}"
+      EMQX_AUTH__POSTGRES__PASSWORD: "${POSTGRES_PASSWORD}"
+      EMQX_AUTH__POSTGRES__POOL_SIZE: 8
+
+      # Query ajustada para Django con autenticación custom
+      EMQX_AUTH__POSTGRES__AUTH_QUERY: >-
+        SELECT password_hash AS password_hash, is_superuser
+        FROM mqtt_user
+        WHERE username = $${username} AND status = true
+        LIMIT 1
+
+      # Algoritmo de hash - usar bcrypt para compatibilidad
+      EMQX_AUTH__POSTGRES__PASSWORD_HASH_ALGORITHM: bcrypt
+
+      # ─────────────────────────────────────────────────────────
+      # ACL PostgreSQL (opcional, descomenta si usas mqtt_acl)
+      # ─────────────────────────────────────────────────────────
+      # EMQX_ACL__POSTGRES__SERVER: "${POSTGRES_HOST}:${POSTGRES_PORT}"
+      # EMQX_ACL__POSTGRES__DATABASE: "${POSTGRES_DB}"
+      # EMQX_ACL__POSTGRES__USERNAME: "${POSTGRES_USER}"
+      # EMQX_ACL__POSTGRES__PASSWORD: "${POSTGRES_PASSWORD}"
+      # EMQX_ACL__POSTGRES__ACL_QUERY: >-
+      #   SELECT allow, ipaddr, username, clientid, access, topic
+      #   FROM mqtt_acl
+      #   WHERE username = $${username} OR username = '$$all'
+
+    networks:
+      - iotcorpsas_net
